@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="CAD→USD">
+<meta name="theme-color" content="#0b1020">
+<title>CAD → USD</title>
+<style>
+  :root{
+    --bg1:#0b1020; --bg2:#131a35; --card:rgba(255,255,255,.06);
+    --stroke:rgba(255,255,255,.12); --txt:#f4f6ff; --muted:#9aa6d6;
+    --red:#ff5a6e; --accent:#5b8cff;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%}
+  body{
+    font:16px/1.4 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;
+    color:var(--txt);
+    background:
+      radial-gradient(120% 90% at 80% -10%, #2a3a8f55, transparent 60%),
+      radial-gradient(120% 90% at -10% 110%, #b5273f44, transparent 55%),
+      linear-gradient(160deg,var(--bg1),var(--bg2));
+    background-attachment:fixed;
+    min-height:100dvh;
+    display:flex; align-items:center; justify-content:center;
+    padding:max(20px,env(safe-area-inset-top)) 20px max(20px,env(safe-area-inset-bottom));
+    -webkit-user-select:none; user-select:none;
+  }
+  .card{
+    width:100%; max-width:380px;
+    background:var(--card);
+    border:1px solid var(--stroke);
+    border-radius:28px;
+    padding:26px 24px 22px;
+    backdrop-filter:blur(24px) saturate(160%);
+    -webkit-backdrop-filter:blur(24px) saturate(160%);
+    box-shadow:0 24px 60px -20px #000a, inset 0 1px 0 #ffffff22;
+    cursor:pointer;
+  }
+  .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:22px}
+  .flags{font-size:26px;letter-spacing:2px}
+  .pair{font-size:13px;color:var(--muted);font-weight:600;letter-spacing:.5px}
+  .rate{font-size:13px;color:var(--muted);text-align:right;line-height:1.3}
+  .rate b{color:var(--txt);font-size:15px}
+
+  .field{margin-bottom:6px}
+  .label{font-size:12px;color:var(--muted);font-weight:600;margin:0 0 6px 2px;letter-spacing:.5px}
+  .inwrap{position:relative}
+  .cur{position:absolute;left:18px;top:50%;transform:translateY(-50%);color:var(--muted);font-weight:700;font-size:22px}
+  input{
+    width:100%; padding:16px 18px 16px 48px;
+    font-size:30px; font-weight:700; color:var(--txt);
+    background:rgba(0,0,0,.25); border:1px solid var(--stroke);
+    border-radius:18px; outline:none; -webkit-user-select:text; user-select:text;
+  }
+  input:focus{border-color:var(--accent);box-shadow:0 0 0 4px #5b8cff33}
+
+  .arrow{text-align:center;color:var(--muted);font-size:20px;margin:10px 0}
+
+  .out{
+    background:linear-gradient(135deg,#5b8cff22,#ffffff10);
+    border:1px solid var(--stroke); border-radius:18px;
+    padding:16px 18px; display:flex;align-items:baseline;gap:6px;
+  }
+  .out .cur2{color:var(--muted);font-weight:700;font-size:22px}
+  .result{font-size:34px;font-weight:800;letter-spacing:-.5px;flex:1;-webkit-user-select:text;user-select:text}
+
+  .foot{margin-top:18px;display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--muted)}
+  .dot{width:7px;height:7px;border-radius:50%;background:#3ddc7e;display:inline-block;margin-right:6px;vertical-align:middle}
+  .dot.err{background:var(--red)}
+  .dot.load{background:#ffcc4d;animation:pulse 1s infinite}
+  @keyframes pulse{50%{opacity:.3}}
+  .tap{opacity:.7}
+</style>
+</head>
+<body>
+  <div class="card" id="card">
+    <div class="top">
+      <div>
+        <div class="flags">🇨🇦 → 🇺🇸</div>
+        <div class="pair">CANADIAN → US DOLLAR</div>
+      </div>
+      <div class="rate" id="rateBox"><b>—</b><br>per $1 CAD</div>
+    </div>
+
+    <div class="field">
+      <div class="label">YOU HAVE (CAD)</div>
+      <div class="inwrap">
+        <span class="cur">$</span>
+        <input id="amt" type="text" inputmode="decimal" value="100" autocomplete="off">
+      </div>
+    </div>
+
+    <div class="arrow">↓</div>
+
+    <div class="field">
+      <div class="label">YOU GET (USD)</div>
+      <div class="out">
+        <span class="cur2">$</span>
+        <span class="result" id="result">—</span>
+      </div>
+    </div>
+
+    <div class="foot">
+      <span><span class="dot load" id="dot"></span><span id="status">Fetching…</span></span>
+      <span class="tap">tap to refresh</span>
+    </div>
+  </div>
+
+<script>
+const API = "https://api.frankfurter.app/latest?from=CAD&to=USD";
+const FALLBACK = "https://open.er-api.com/v6/latest/CAD";
+let rate = null;
+
+const $ = id => document.getElementById(id);
+const fmt = n => n.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+
+function calc(){
+  const v = parseFloat($("amt").value.replace(/[^0-9.]/g,""));
+  $("result").textContent = (rate!=null && !isNaN(v)) ? fmt(v*rate) : "—";
+}
+
+function setStatus(cls,msg){ $("dot").className="dot "+cls; $("status").textContent=msg; }
+
+async function fetchRate(){
+  setStatus("load","Fetching…");
+  try{
+    let r;
+    try{
+      const j = await (await fetch(API,{cache:"no-store"})).json();
+      r = j.rates && j.rates.USD;
+    }catch(e){ r = null; }
+    if(r==null){ // fallback
+      const j = await (await fetch(FALLBACK,{cache:"no-store"})).json();
+      r = j.rates && j.rates.USD;
+    }
+    if(r==null) throw new Error("no rate");
+    rate = r;
+    $("rateBox").innerHTML = "<b>$"+rate.toFixed(4)+"</b><br>per $1 CAD";
+    const t = new Date().toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"});
+    setStatus("","Updated "+t);
+    calc();
+  }catch(e){
+    setStatus("err","Offline — using last rate");
+  }
+}
+
+$("amt").addEventListener("input",calc);
+// tap card to refresh (but not when typing in the input)
+$("card").addEventListener("click",e=>{ if(e.target.id!=="amt") fetchRate(); });
+// "look at it" — refresh when app/tab becomes visible
+document.addEventListener("visibilitychange",()=>{ if(!document.hidden) fetchRate(); });
+window.addEventListener("pageshow",fetchRate);
+fetchRate();
+</script>
+</body>
+</html>
