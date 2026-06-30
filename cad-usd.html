@@ -68,6 +68,35 @@
   .out .cur2{color:var(--muted);font-weight:700;font-size:22px}
   .result{font-size:34px;font-weight:800;letter-spacing:-.5px;flex:1;-webkit-user-select:text;user-select:text}
 
+  /* ---- history ---- */
+  .hist{margin-top:22px;border-top:1px solid var(--stroke);padding-top:18px}
+  .tabs{display:flex;gap:6px;background:rgba(0,0,0,.25);border:1px solid var(--stroke);border-radius:14px;padding:4px;margin-bottom:14px}
+  .tab{flex:1;text-align:center;padding:8px 0;font-size:13px;font-weight:700;color:var(--muted);border-radius:10px;cursor:pointer;letter-spacing:.3px}
+  .tab.on{background:var(--accent);color:#fff;box-shadow:0 4px 12px -4px var(--accent)}
+
+  .stats{display:flex;justify-content:space-between;margin-bottom:12px;font-size:12px}
+  .stat{text-align:center;flex:1}
+  .stat .k{color:var(--muted);font-size:10px;letter-spacing:.5px;font-weight:600}
+  .stat .v{font-size:16px;font-weight:800;margin-top:2px}
+  .v.up{color:#3ddc7e} .v.down{color:var(--red)}
+
+  .chart{width:100%;height:130px;display:block;margin-bottom:6px;overflow:visible}
+  .chart .line{fill:none;stroke:var(--accent);stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round}
+  .chart .area{fill:url(#g);opacity:.6}
+  .chart .gl{stroke:rgba(255,255,255,.08);stroke-width:1}
+  .chart text{fill:var(--muted);font-size:9px;font-weight:600}
+  .chart .dotpt{fill:#fff;stroke:var(--accent);stroke-width:2}
+  .chart .lbl{fill:var(--txt);font-size:10px;font-weight:800}
+
+  .tbl{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;-webkit-user-select:text;user-select:text}
+  .tbl th{color:var(--muted);font-size:10px;font-weight:600;letter-spacing:.5px;text-align:right;padding:6px 4px;border-bottom:1px solid var(--stroke)}
+  .tbl th:first-child{text-align:left}
+  .tbl td{padding:7px 4px;text-align:right;border-bottom:1px solid rgba(255,255,255,.05)}
+  .tbl td:first-child{text-align:left;color:var(--txt);font-weight:600}
+  .tbl tr:last-child td{border-bottom:none}
+  .tbl .chg.up{color:#3ddc7e} .tbl .chg.down{color:var(--red)}
+  .tblwrap{max-height:240px;overflow-y:auto;-webkit-overflow-scrolling:touch}
+
   .foot{margin-top:18px;display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--muted)}
   .dot{width:7px;height:7px;border-radius:50%;background:#3ddc7e;display:inline-block;margin-right:6px;vertical-align:middle}
   .dot.err{background:var(--red)}
@@ -104,6 +133,31 @@
       </div>
     </div>
 
+    <div class="hist">
+      <div class="tabs" id="tabs">
+        <div class="tab on" data-mode="year">YEAR</div>
+        <div class="tab" data-mode="month">MONTH</div>
+        <div class="tab" data-mode="week">WEEK</div>
+      </div>
+
+      <div class="stats" id="stats">
+        <div class="stat"><div class="k">LOW</div><div class="v" id="sLow">—</div></div>
+        <div class="stat"><div class="k">HIGH</div><div class="v" id="sHigh">—</div></div>
+        <div class="stat"><div class="k">CHANGE</div><div class="v" id="sChg">—</div></div>
+      </div>
+
+      <svg class="chart" id="chart" viewBox="0 0 320 130" preserveAspectRatio="none">
+        <defs><linearGradient id="g" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0%" stop-color="#5b8cff" stop-opacity=".45"/>
+          <stop offset="100%" stop-color="#5b8cff" stop-opacity="0"/>
+        </linearGradient></defs>
+      </svg>
+
+      <div class="tblwrap">
+        <table class="tbl" id="tbl"></table>
+      </div>
+    </div>
+
     <div class="foot">
       <span><span class="dot load" id="dot"></span><span id="status">Fetching…</span></span>
       <span class="tap">tap to refresh</span>
@@ -111,7 +165,7 @@
   </div>
 
 <script>
-const API = "https://api.frankfurter.app/latest?from=CAD&to=USD";
+const API = "https://api.frankfurter.dev/v1/latest?from=CAD&to=USD";
 const FALLBACK = "https://open.er-api.com/v6/latest/CAD";
 let rate = null;
 
@@ -149,12 +203,122 @@ async function fetchRate(){
 }
 
 $("amt").addEventListener("input",calc);
-// tap card to refresh (but not when typing in the input)
-$("card").addEventListener("click",e=>{ if(e.target.id!=="amt") fetchRate(); });
+// tap card to refresh (ignore typing, tabs, and table)
+$("card").addEventListener("click",e=>{
+  if(e.target.id==="amt" || e.target.closest("#tabs") || e.target.closest(".tblwrap")) return;
+  fetchRate();
+});
 // "look at it" — refresh when app/tab becomes visible
-document.addEventListener("visibilitychange",()=>{ if(!document.hidden) fetchRate(); });
-window.addEventListener("pageshow",fetchRate);
+document.addEventListener("visibilitychange",()=>{ if(!document.hidden){ fetchRate(); fetchHistory(); }});
+window.addEventListener("pageshow",()=>{ fetchRate(); fetchHistory(); });
+
+/* ---------- history ---------- */
+const HIST = "https://api.frankfurter.dev/v1/";
+let series = [];          // [{d:Date, v:Number}] ascending
+let mode = "year";
+
+const iso = d => d.toISOString().slice(0,10);
+const r4 = n => "$"+n.toFixed(4);
+
+async function fetchHistory(){
+  if(series.length) return;                 // fetch once
+  const end = new Date();
+  const start = new Date(); start.setFullYear(start.getFullYear()-1);
+  try{
+    const j = await (await fetch(`${HIST}${iso(start)}..${iso(end)}?from=CAD&to=USD`,{cache:"no-store"})).json();
+    series = Object.keys(j.rates).sort()
+      .map(k=>({d:new Date(k+"T00:00:00"), v:j.rates[k].USD}));
+    render();
+  }catch(e){ /* chart stays empty; live rate still works */ }
+}
+
+function windowed(){
+  if(!series.length) return [];
+  const last = series[series.length-1].d;
+  const cut = new Date(last);
+  if(mode==="year")  cut.setFullYear(cut.getFullYear()-1);
+  if(mode==="month") cut.setMonth(cut.getMonth()-1);
+  if(mode==="week")  cut.setDate(cut.getDate()-7);
+  return series.filter(p=>p.d>=cut);
+}
+
+// group rows for the table
+function groupKey(d){
+  if(mode==="year")  return d.toLocaleDateString("en-US",{month:"short",year:"2-digit"});
+  if(mode==="month"){ const s=weekStart(d); return "Wk "+s.toLocaleDateString("en-US",{month:"short",day:"numeric"}); }
+  return d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"});
+}
+function weekStart(d){ const x=new Date(d); const dow=(x.getDay()+6)%7; x.setDate(x.getDate()-dow); return x; }
+
+function render(){
+  const pts = windowed();
+  if(!pts.length) return;
+  const vals = pts.map(p=>p.v);
+  const lo=Math.min(...vals), hi=Math.max(...vals);
+  const first=vals[0], lastv=vals[vals.length-1];
+  const pct=((lastv-first)/first)*100;
+
+  $("sLow").textContent = r4(lo);
+  $("sHigh").textContent = r4(hi);
+  const chg=$("sChg");
+  chg.textContent = (pct>=0?"+":"")+pct.toFixed(2)+"%";
+  chg.className = "v "+(pct>=0?"up":"down");
+
+  drawChart(pts,lo,hi);
+  drawTable(pts);
+}
+
+function drawChart(pts,lo,hi){
+  const W=320,H=130,pad=14;
+  const span=(hi-lo)||1;
+  const x=i=> pad + i*(W-2*pad)/Math.max(1,pts.length-1);
+  const y=v=> H-pad - (v-lo)/span*(H-2*pad);
+  let line="", area=`M ${x(0)} ${H-pad}`;
+  pts.forEach((p,i)=>{ const px=x(i).toFixed(1), py=y(p.v).toFixed(1);
+    line+=(i?" L ":"M ")+px+" "+py; area+=" L "+px+" "+py; });
+  area+=` L ${x(pts.length-1)} ${H-pad} Z`;
+  const last=pts[pts.length-1];
+  const svg=`
+    <line class="gl" x1="${pad}" y1="${y(hi).toFixed(1)}" x2="${W-pad}" y2="${y(hi).toFixed(1)}"/>
+    <line class="gl" x1="${pad}" y1="${y(lo).toFixed(1)}" x2="${W-pad}" y2="${y(lo).toFixed(1)}"/>
+    <text x="${pad}" y="${(y(hi)-3).toFixed(1)}">${hi.toFixed(4)}</text>
+    <text x="${pad}" y="${(y(lo)+9).toFixed(1)}">${lo.toFixed(4)}</text>
+    <path class="area" d="${area}"/>
+    <path class="line" d="${line}"/>
+    <circle class="dotpt" cx="${x(pts.length-1).toFixed(1)}" cy="${y(last.v).toFixed(1)}" r="3.5"/>
+    <text class="lbl" x="${(W-pad).toFixed(1)}" y="${(y(last.v)-7).toFixed(1)}" text-anchor="end">${last.v.toFixed(4)}</text>`;
+  const c=$("chart");
+  // keep <defs>, replace the rest
+  c.innerHTML = c.querySelector("defs").outerHTML + svg;
+}
+
+function drawTable(pts){
+  const groups=new Map();
+  pts.forEach(p=>{ const k=groupKey(p.d);
+    if(!groups.has(k)) groups.set(k,[]); groups.get(k).push(p.v); });
+  let prev=null, rows="";
+  for(const [k,vs] of groups){
+    const avg=vs.reduce((a,b)=>a+b,0)/vs.length;
+    const lo=Math.min(...vs), hi=Math.max(...vs);
+    let chg="—",cls="";
+    if(prev!=null){ const d=((avg-prev)/prev)*100; chg=(d>=0?"+":"")+d.toFixed(2)+"%"; cls=d>=0?"up":"down"; }
+    prev=avg;
+    rows+=`<tr><td>${k}</td><td>${avg.toFixed(4)}</td><td>${lo.toFixed(4)}</td><td>${hi.toFixed(4)}</td><td class="chg ${cls}">${chg}</td></tr>`;
+  }
+  $("tbl").innerHTML =
+    `<thead><tr><th>${mode==="week"?"Day":mode==="month"?"Week":"Month"}</th><th>Avg</th><th>Low</th><th>High</th><th>Δ</th></tr></thead><tbody>${rows}</tbody>`;
+}
+
+$("tabs").addEventListener("click",e=>{
+  const t=e.target.closest(".tab"); if(!t) return;
+  e.stopPropagation();
+  mode=t.dataset.mode;
+  [...$("tabs").children].forEach(x=>x.classList.toggle("on",x===t));
+  render();
+});
+
 fetchRate();
+fetchHistory();
 </script>
 </body>
 </html>
